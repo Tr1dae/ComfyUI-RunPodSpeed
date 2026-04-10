@@ -10,13 +10,7 @@ From your ComfyUI Python environment:
 pip install -r custom_nodes/ComfyUI-RunPodSpeed/requirements.txt
 ```
 
-Optional (faster large downloads, same process as the Hub client):
-
-```bash
-pip install hf_transfer
-```
-
-If `hf_transfer` is importable, the downloader sets `HF_HUB_ENABLE_HF_TRANSFER=1`; otherwise it sets it to `0`.
+That installs `huggingface_hub` and **`hf_transfer`** (parallel Rust downloader). The HF Downloader node sets `HF_HUB_ENABLE_HF_TRANSFER=1` when `hf_transfer` imports successfully. You can also set `HF_HUB_ENABLE_HF_TRANSFER=1` in RunPod’s environment so other Hub usage in the same process picks it up from startup.
 
 ## Configure `extra_model_paths.yaml`
 
