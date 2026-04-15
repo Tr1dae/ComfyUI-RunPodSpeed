@@ -12,6 +12,28 @@ pip install -r custom_nodes/ComfyUI-RunPodSpeed/requirements.txt
 
 That installs `huggingface_hub` and **`hf_transfer`** (parallel Rust downloader). The HF Downloader node sets `HF_HUB_ENABLE_HF_TRANSFER=1` when `hf_transfer` imports successfully. You can also set `HF_HUB_ENABLE_HF_TRANSFER=1` in RunPod’s environment so other Hub usage in the same process picks it up from startup.
 
+## Machine startup (`start_remote.sh`)
+
+Optional pod/container entrypoint: pulls **`master.tar.zst`** (or `RUNPODSPEED_HF_FILENAME`) from Hugging Face, extracts to **`/tmp/comfyui_nvme`**, creates **`/tmp/fast_models`** trees, writes **`extra_model_paths.yaml`** next to ComfyUI, then starts ComfyUI from the extracted tree. **No `/workspace` network volume** is required.
+
+**System image:** `python3` with **`huggingface_hub`** installed (`pip install huggingface_hub` in the image or bootstrap layer).
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `RUNPODSPEED_HF_REPO_ID` | Yes | Hub repo id (e.g. `org/WorkingImage`) |
+| `HF_TOKEN` | For private repos | Read token is enough for download |
+| `RUNPODSPEED_HF_FILENAME` | No | Default `master.tar.zst` |
+| `RUNPODSPEED_HF_REPO_TYPE` | No | Default `dataset` (use `model` if applicable) |
+| `RUNPODSPEED_HF_REVISION` | No | Default `main` |
+
+**RunPod template (`dockerArgs` under 4000 chars):** set the Hub env vars in the template environment, then use a one-liner that fetches and runs this script from GitHub `main` (pin a commit SHA in the URL if you want a fixed revision):
+
+```bash
+bash -c 'curl -fsSL "https://raw.githubusercontent.com/Tr1dae/ComfyUI-RunPodSpeed/main/start_remote.sh" -o /tmp/start_remote.sh && bash /tmp/start_remote.sh'
+```
+
+Debug: `huggingface-cli download "$RUNPODSPEED_HF_REPO_ID" master.tar.zst --local-dir /tmp/hf_test --repo-type dataset`
+
 ## Configure `extra_model_paths.yaml`
 
 So loaders resolve files under `/tmp/fast_models/...`, add a block to **`ComfyUI/extra_model_paths.yaml`** (next to ComfyUI’s main folder), or pass the file with `--extra-model-paths-config`.
