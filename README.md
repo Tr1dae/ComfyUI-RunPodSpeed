@@ -42,13 +42,16 @@ Restart ComfyUI after editing paths. Point **RunPodSpeed HF Downloader** `nvme_t
 
 ### Private or gated repos
 
-Set a read token in the environment:
+Set a token in the environment:
 
 ```bash
 export HF_TOKEN=hf_...
 ```
 
-Anonymous access is used when `HF_TOKEN` is unset.
+- **Downloads** (HF Downloader): a **read** token is enough for private/gated content you can access.
+- **Uploads** (HF State Uploader): use a **write** token (`write` role on [Hugging Face token settings](https://huggingface.co/settings/tokens)); otherwise uploads return 401/403.
+
+Anonymous access is used when `HF_TOKEN` is unset (downloads only).
 
 ## Nodes
 
@@ -61,12 +64,32 @@ Anonymous access is used when `HF_TOKEN` is unset.
 ### RunPodSpeed State Packager
 
 - **Inputs:** destination archive path (default `/workspace/master.tar.zst`); **`trigger_package`** (default off) so normal runs do not archive by accident.
-- **Output:** short `status` string.
-- Resolves the ComfyUI root from **`folder_paths.base_path`**, then runs `tar` with **zstd** compression. If the archive file already exists, it is **moved** to `{dirname(archive)}/backups/{stem}_YYYY-MM-DD_HHMMSS.tar.zst` before writing a new one.
+- **Outputs:** `status` (short string) and **`archive_path`** (absolute path to the archive when packaging **succeeds**; empty string when skipped or on error).
+- Resolves the ComfyUI root from **`folder_paths.base_path`**, then runs `tar` with **zstd** compression. If the archive file already exists, it is **moved** to `{dirname(archive)}/backups/{stem}_YYYY-MM-DD_HHMMSS.tar.zst` before writing a new one (local backups only; nothing is versioned on the Hub by this node).
 
 **Excluded from the archive** (relative to the ComfyUI folder name inside the tarball): `models/`, `output/`, `outputs/`, `temp/`, `.git/`, and `__pycache__` trees (via wildcard excludes).
 
 **Requirements:** GNU `tar` with **zstd** support (`tar --zstd`). Typical on Ubuntu RunPod images; Windows portable setups may not support `--zstd`—this node is aimed at Linux containers.
+
+### RunPodSpeed HF State Uploader
+
+Uploads a local `.tar.zst` to a **fixed path** in a Hugging Face **model** or **dataset** repo. Each successful run creates a new Hub commit that **replaces** the file at `path_in_repo` (for example `master.tar.zst`). There are **no extra backup copies on Hugging Face**—only the latest blob at that path matters for your “pull on cold boot” workflow.
+
+- **Inputs:** `archive_path` (wire from packager **`archive_path`** or set the same path manually); `hf_repo_id` (e.g. `org/private-state`); `path_in_repo` (default `master.tar.zst`); **`repo_type`** `model` or `dataset`; **`trigger_upload`** (default off); optional **`packager_status`** — if connected and non-empty, upload runs **only** when the value starts with `success:` (match the State Packager success prefix). If left disconnected/empty, upload depends only on `trigger_upload` and file existence (use the optional wire to avoid pushing after a failed or skipped packager).
+
+- **Output:** `status` string.
+
+**Hub setup:** Create an empty **private** model or dataset repository. Set **`HF_TOKEN`** to a token with **write** access. Large archives use **Git LFS** on the Hub; first push can take a long time depending on size and link speed.
+
+**Chain example:** State Packager `status` → HF State Uploader `packager_status`; State Packager `archive_path` → HF State Uploader `archive_path`. Enable **`trigger_package`** then **`trigger_upload`** when you intend to publish.
+
+**Pull on another machine** (read token or public URL as appropriate):
+
+```bash
+huggingface-cli download <hf_repo_id> <path_in_repo> --local-dir /path/to/dir --repo-type dataset
+```
+
+(`--repo-type model` if you used a model repo.) Or use `hf_hub_download(repo_id=..., filename=..., local_dir=..., repo_type=...)` in Python.
 
 ## Logs
 

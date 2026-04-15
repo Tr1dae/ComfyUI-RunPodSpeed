@@ -1,5 +1,5 @@
 """
-RunPodSpeed nodes: HF download to NVMe and ComfyUI tree packager for network storage.
+RunPodSpeed nodes: HF download to NVMe, state packager, and Hub state archive upload.
 """
 
 from __future__ import annotations
@@ -15,9 +15,10 @@ from urllib.parse import unquote, urlparse
 import folder_paths
 
 try:
-    from huggingface_hub import hf_hub_download
+    from huggingface_hub import HfApi, hf_hub_download
     from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
 except ImportError:
+    HfApi = None  # type: ignore[misc, assignment]
     hf_hub_download = None  # type: ignore[misc, assignment]
     HfHubHTTPError = Exception  # type: ignore[misc, assignment]
     RepositoryNotFoundError = Exception  # type: ignore[misc, assignment]
@@ -76,14 +77,20 @@ def _configure_hf_transfer_env() -> None:
 
 
 def _print_hf_http_error(err: HfHubHTTPError) -> None:
+    _print_hf_hub_http_error("RunPodSpeed_HFDownloader", err)
+
+
+def _print_hf_hub_http_error(component: str, err: HfHubHTTPError) -> None:
     msg = str(err)
     status = getattr(getattr(err, "response", None), "status_code", None)
     if status == 401:
-        print(f"[RunPodSpeed_HFDownloader] HTTP 401 (unauthorized). Check HF_TOKEN for private/gated repos. {msg}")
+        print(f"[{component}] HTTP 401 (unauthorized). Check HF_TOKEN (read for downloads, write for uploads). {msg}")
+    elif status == 403:
+        print(f"[{component}] HTTP 403 (forbidden). Token may lack write access or repo is restricted. {msg}")
     elif status == 429:
-        print(f"[RunPodSpeed_HFDownloader] HTTP 429 (rate limited). Retry later or reduce parallel downloads. {msg}")
+        print(f"[{component}] HTTP 429 (rate limited). Retry later or reduce parallel requests. {msg}")
     else:
-        print(f"[RunPodSpeed_HFDownloader] Hub HTTP error (status={status}): {msg}")
+        print(f"[{component}] Hub HTTP error (status={status}): {msg}")
 
 
 class RunPodSpeed_HFDownloader:
@@ -165,18 +172,18 @@ class RunPodSpeed_StatePackager:
             },
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("status",)
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("status", "archive_path")
     FUNCTION = "package"
     CATEGORY = "RunPodSpeed"
 
     def package(self, network_archive_path: str, trigger_package: bool):
+        archive = os.path.abspath(os.path.expanduser(network_archive_path.strip()))
         if not trigger_package:
             msg = "skipped (trigger_package=False)"
             print(f"[RunPodSpeed_StatePackager] {msg}")
-            return (msg,)
+            return (msg, "")
 
-        archive = os.path.abspath(os.path.expanduser(network_archive_path.strip()))
         archive_dir = os.path.dirname(archive)
         if archive_dir:
             os.makedirs(archive_dir, exist_ok=True)
@@ -187,7 +194,7 @@ class RunPodSpeed_StatePackager:
         if not folder_name or parent == comfy_root:
             err = f"Could not split ComfyUI root into parent/folder: {comfy_root!r}"
             print(f"[RunPodSpeed_StatePackager] {err}")
-            return (f"error: {err}",)
+            return (f"error: {err}", "")
 
         backup_note = ""
         if os.path.isfile(archive):
@@ -235,8 +242,113 @@ class RunPodSpeed_StatePackager:
         if proc.returncode != 0:
             err = f"tar failed with exit code {proc.returncode}"
             print(f"[RunPodSpeed_StatePackager] {err}")
-            return (f"error: {err}{backup_note}",)
+            return (f"error: {err}{backup_note}", "")
 
         ok = f"success: wrote {archive}{backup_note}"
         print(f"[RunPodSpeed_StatePackager] {ok}")
+        return (ok, archive)
+
+
+class RunPodSpeed_HFStateUploader:
+    """Upload a local state archive to a Hugging Face repo path (overwrite remote on each push)."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "archive_path": ("STRING", {"default": "/workspace/master.tar.zst"}),
+                "hf_repo_id": ("STRING", {"default": ""}),
+                "path_in_repo": ("STRING", {"default": "master.tar.zst"}),
+                "repo_type": (["model", "dataset"], {"default": "dataset"}),
+                "trigger_upload": ("BOOLEAN", {"default": False}),
+            },
+            "optional": {
+                "packager_status": ("STRING", {"default": ""}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("status",)
+    FUNCTION = "upload"
+    CATEGORY = "RunPodSpeed"
+
+    def upload(
+        self,
+        archive_path: str,
+        hf_repo_id: str,
+        path_in_repo: str,
+        repo_type: str,
+        trigger_upload: bool,
+        packager_status: str = "",
+    ):
+        if HfApi is None:
+            err = "huggingface_hub is not installed. pip install -r requirements.txt in ComfyUI-RunPodSpeed"
+            print(f"[RunPodSpeed_HFStateUploader] {err}")
+            return (f"error: {err}",)
+
+        if not trigger_upload:
+            msg = "skipped (trigger_upload=False)"
+            print(f"[RunPodSpeed_HFStateUploader] {msg}")
+            return (msg,)
+
+        ps = (packager_status or "").strip()
+        if ps and not ps.startswith("success:"):
+            msg = "skipped (packager_status does not start with success: — not uploading)"
+            print(f"[RunPodSpeed_HFStateUploader] {msg}")
+            return (msg,)
+
+        token = os.environ.get("HF_TOKEN")
+        if not token:
+            msg = "error: HF_TOKEN is not set (write token required for uploads)"
+            print(f"[RunPodSpeed_HFStateUploader] {msg}")
+            return (msg,)
+
+        rid = (hf_repo_id or "").strip()
+        if not rid:
+            msg = "error: hf_repo_id is empty"
+            print(f"[RunPodSpeed_HFStateUploader] {msg}")
+            return (msg,)
+
+        local = os.path.abspath(os.path.expanduser(archive_path.strip()))
+        if not os.path.isfile(local):
+            msg = f"error: archive file not found: {local}"
+            print(f"[RunPodSpeed_HFStateUploader] {msg}")
+            return (msg,)
+
+        remote_path = (path_in_repo or "master.tar.zst").strip().lstrip("/")
+        if not remote_path:
+            msg = "error: path_in_repo is empty"
+            print(f"[RunPodSpeed_HFStateUploader] {msg}")
+            return (msg,)
+
+        api = HfApi(token=token)
+        commit_message = "RunPodSpeed state archive (overwrite)"
+        try:
+            result = api.upload_file(
+                path_or_fileobj=local,
+                path_in_repo=remote_path,
+                repo_id=rid,
+                repo_type=repo_type,
+                token=token,
+                commit_message=commit_message,
+            )
+        except HfHubHTTPError as e:
+            _print_hf_hub_http_error("RunPodSpeed_HFStateUploader", e)
+            traceback.print_exc()
+            return (f"error: Hub HTTP: {e}",)
+        except RepositoryNotFoundError as e:
+            print(f"[RunPodSpeed_HFStateUploader] Repository not found: {e}")
+            traceback.print_exc()
+            return (f"error: {e}",)
+        except Exception as e:
+            print(f"[RunPodSpeed_HFStateUploader] Upload failed: {e}")
+            traceback.print_exc()
+            return (f"error: {e}",)
+
+        extra = ""
+        commit_url = getattr(result, "commit_url", None)
+        if commit_url:
+            extra = f" commit_url={commit_url}"
+        ok = f"success: uploaded to {rid} ({repo_type}) at {remote_path}{extra}"
+        print(f"[RunPodSpeed_HFStateUploader] {ok}")
         return (ok,)
