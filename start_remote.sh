@@ -11,7 +11,7 @@
 #   RUNPODSPEED_HF_REVISION   default: main
 #   HF_TOKEN                  required for private repos (read token is enough for download)
 #
-# System Python needs: pip install huggingface_hub
+# System Python: huggingface_hub (script auto-installs via pip if missing; PEP 668 images use --break-system-packages).
 # Debug download: huggingface-cli download "$RUNPODSPEED_HF_REPO_ID" master.tar.zst --local-dir /tmp/hf_test --repo-type dataset
 #
 set -e
@@ -39,6 +39,26 @@ require_hf_repo_id() {
     fi
 }
 
+# Install huggingface_hub for python3 if missing (RunPod base images often omit it).
+ensure_huggingface_hub() {
+    if python3 -c "import huggingface_hub" 2>/dev/null; then
+        return 0
+    fi
+    echo "huggingface_hub not found for python3; installing via pip..." >&2
+    if ! python3 -m pip --version >/dev/null 2>&1; then
+        echo "ERROR: python3 has no pip (python3 -m pip). Install pip or bake huggingface_hub into the image." >&2
+        exit 1
+    fi
+    if python3 -m pip install --no-cache-dir -U "huggingface_hub>=0.20.0" >&2; then
+        return 0
+    fi
+    if python3 -m pip install --no-cache-dir -U "huggingface_hub>=0.20.0" --break-system-packages >&2; then
+        return 0
+    fi
+    echo "ERROR: pip could not install huggingface_hub. Try: python3 -m pip install huggingface_hub --break-system-packages" >&2
+    exit 1
+}
+
 # Download state archive using system Python (works before ComfyUI venv exists).
 download_hf_archive() {
     local filename="${RUNPODSPEED_HF_FILENAME:-master.tar.zst}"
@@ -51,6 +71,8 @@ download_hf_archive() {
         echo "ERROR: python3 not found; install Python 3 to bootstrap from Hugging Face." >&2
         exit 1
     fi
+
+    ensure_huggingface_hub
 
     rm -rf "$RUNPODSPEED_DL_DIR"
     mkdir -p "$RUNPODSPEED_DL_DIR"

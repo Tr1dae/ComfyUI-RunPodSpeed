@@ -16,7 +16,7 @@ That installs `huggingface_hub` and **`hf_transfer`** (parallel Rust downloader)
 
 Optional pod/container entrypoint: pulls **`master.tar.zst`** (or `RUNPODSPEED_HF_FILENAME`) from Hugging Face, extracts to **`/tmp/comfyui_nvme`**, creates **`/tmp/fast_models`** trees, writes **`extra_model_paths.yaml`** next to ComfyUI, then starts ComfyUI from the extracted tree. **No `/workspace` network volume** is required.
 
-**System image:** `python3` with **`huggingface_hub`** installed (`pip install huggingface_hub` in the image or bootstrap layer).
+**System image:** `python3` with **`pip`**. If `huggingface_hub` is missing, **`start_remote.sh` installs it** via `pip` (falls back to **`--break-system-packages`** on PEP 668–locked images such as Ubuntu 24.04). You can still pre-install in the image to skip the pip step.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
