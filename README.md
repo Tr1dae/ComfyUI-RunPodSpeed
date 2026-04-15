@@ -26,11 +26,13 @@ Optional pod/container entrypoint: pulls **`master.tar.zst`** (or `RUNPODSPEED_H
 | `RUNPODSPEED_HF_REPO_TYPE` | No | Default `dataset` (use `model` if applicable) |
 | `RUNPODSPEED_HF_REVISION` | No | Default `main` |
 
-**RunPod template (`dockerArgs` under 4000 chars):** set the Hub env vars in the template environment, then use a one-liner that fetches and runs this script from GitHub `main` (pin a commit SHA in the URL if you want a fixed revision):
+**RunPod template (`dockerArgs` under 4000 chars):** set the Hub env vars in the template environment, then use a one-liner that **always re-downloads** the script (avoids a stale `/tmp/start_remote.sh` from an older pod image):
 
 ```bash
 bash -c 'curl -fsSL "https://raw.githubusercontent.com/Tr1dae/ComfyUI-RunPodSpeed/main/start_remote.sh" -o /tmp/start_remote.sh && bash /tmp/start_remote.sh'
 ```
+
+Logs should include **`[RunPodSpeed] start_remote.sh revision: inline_hf_pip_bootstrap`** and, if needed, **`huggingface_hub missing; installing with ... -m pip`** before the download proceeds.
 
 Debug: `huggingface-cli download "$RUNPODSPEED_HF_REPO_ID" master.tar.zst --local-dir /tmp/hf_test --repo-type dataset`
 
